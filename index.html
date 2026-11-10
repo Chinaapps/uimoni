@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en" data-mode="night">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumen — a glass switch</title>
+<meta name="description" content="A light/dark toggle with a glass knob, drawn in a single WebGL fragment shader.">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<canvas id="scene" aria-hidden="true"></canvas>
+
+<header class="top">
+  <span class="brand">Lumen<span class="brand__no">01</span></span>
+  <span class="hint">glass switch</span>
+</header>
+
+<div class="ui">
+  <button class="surface" id="surface" type="button" role="switch" aria-checked="false"
+          aria-label="Switch between night and day">
+    <span class="surface__fallback" aria-hidden="true"><span class="surface__knob"></span></span>
+  </button>
+
+  <div class="readout">
+    <span class="readout__value" id="state">Night</span>
+    <span class="readout__bar"><span class="readout__fill" id="fill"></span></span>
+    <span class="readout__num" id="num">0</span>
+  </div>
+</div>
+
+<footer class="foot">
+  <p class="foot__line">Drag the knob. Halfway across, the swarm holds its breath.</p>
+  <p class="foot__note">One fragment shader · no textures, no libraries</p>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
