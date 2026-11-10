@@ -139,27 +139,29 @@ void main() {
   bg += stripCol * (0.34 * gauss(rad, 118.0) + 0.20 * gauss(rad, 46.0)) * breathe;
 
   /* ---- track ---- */
-  float dTr = sdRoundBox(p, TRACK - TRACK_R, TRACK_R);
+  float dTr  = sdRoundBox(p, TRACK - TRACK_R, TRACK_R);
+  float trkA = 1.0 - smoothstep(-px * 1.8, px * 1.8, dTr);
 
-  /* drop shadow of the whole track */
-  float shT = exp(-max(dTr, 0.0) / 26.0);
-  bg *= 1.0 - mix(0.58, 0.13, tp) * shT * (0.55 + 0.45 * gauss(p.y + 30.0, 60.0));
+  /* drop shadow of the whole track, cast on the page only */
+  float shT = exp(-max(dTr, 0.0) / 30.0);
+  vec3  bgSh = bg * (1.0 - mix(0.62, 0.15, tp) * shT * (1.0 - trkA) *
+                          (0.55 + 0.45 * gauss(p.y + 26.0, 70.0)));
 
-  vec3 trk = bg + mix(0.052, 0.030, tp);
-  /* inner wall: dark at the bottom, lit at the top */
-  trk -= 0.060 * smoothstep(0.35, 1.0, clamp((p.y + TRACK.y) / (2.0 * TRACK.y), 0.0, 1.0));
+  vec3 trk = bg + mix(0.055, 0.032, tp);
+  /* inner wall: dark toward the bottom, catch light on the top lip */
+  float vpos = clamp((p.y + TRACK.y) / (2.0 * TRACK.y), 0.0, 1.0);
+  trk -= 0.070 * (1.0 - smoothstep(0.0, 0.55, vpos));
   trk += 0.030 * gauss(p.y + TRACK.y - 1.0, 4.0);
   /* rim */
   float rimT = exp(-abs(dTr + 0.6) / 1.3);
-  trk += rimT * mix(0.10, 0.30, tp);
+  trk += rimT * mix(0.10, 0.34, tp);
 
   /* wash that runs along the track with the knob */
   vec2  sd  = vec2(cos(-PI * 0.5 + t * PI), sin(-PI * 0.5 + t * PI));
   float wash = gauss(p.x - kx, 62.0) * gauss(p.y - sd.y * 40.0, 30.0);
   trk += stripCol * wash * 0.30 * breathe;
 
-  float trkA = 1.0 - smoothstep(-px * 1.8, px * 1.8, dTr);
-  vec3 col = mix(bg, trk, trkA);
+  vec3 col = mix(bgSh, trk, trkA);
 
   /* ---- dot matrix icons, behind the glass ---- */
   const float PITCH = 5.6;
