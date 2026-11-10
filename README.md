@@ -13,12 +13,13 @@ canvas is WebGL: no images, no libraries, no CSS trickery.
 Two passes per frame:
 
 1. **World pass → off-screen texture.** Page background (cool at night, warm paper by
-   day), the glassless track, the light wash that runs along it, and the 7×7 pixel
-   icon matrix sitting where the knob is.
-2. **Glass pass → screen.** The lens samples that texture with a bevel-driven
-   refraction offset, a small per-channel split for chromatic aberration, and a
-   widening blur for frost. Then it lays the light strip on the rim, adds the
-   scatter inside the glass and the spill onto the page, and finally tone-maps.
+   day), the glassless track with its drop shadow, the light wash that runs along it,
+   and the dot-matrix icon sitting where the knob is.
+2. **Glass pass → screen.** The knob is a rounded square taller than the track, so it
+   sits proud of it; it samples that texture with a bevel-driven refraction offset, a
+   small per-channel split for chromatic aberration and a widening blur for frost.
+   Then the edge light, the orbiting strip, the scatter inside and the bloom outside
+   are added, and the frame is tone-mapped.
 
 ### The orbiting strip
 

@@ -1,18 +1,17 @@
 /* ============================================================
    Lumen — light/dark glass switch
-   Everything you see inside the canvas is two fragment shader
-   passes: pass A paints the world (page, track, pixel icons,
-   light wash, spill), pass B lays the glass lens and its
-   orbiting light strip over that world.
+   Two fragment shader passes:
+     A  paints the world  (page, track, dot-matrix icons, spill)
+     B  lays the glass lens, its edge light and orbit strip on top
    ============================================================ */
 
 (function () {
   'use strict';
 
-  /* ---------- layout constants shared with the shaders ---------- */
-  const TRACK_W = 300;      // units
-  const TRACK_H = 120;
-  const TRAVEL = 100;
+  /* ---------- layout, in shader units ---------- */
+  const TRACK_W = 300;      // full track width
+  const KNOB    = 100;      // knob is taller than the track: it sits proud
+  const TRAVEL  = 96;       // knob centre travel, ± units
 
   const canvas = document.getElementById('scene');
   const surface = document.getElementById('surface');
@@ -39,7 +38,7 @@
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   /* ============================================================
-     shader source
+     shaders
      ============================================================ */
 
   const VERT = `
@@ -51,7 +50,6 @@ void main() {
 }
 `;
 
-  /* shared GLSL helpers, injected into both fragment shaders */
   const COMMON = `
 precision highp float;
 
@@ -77,17 +75,18 @@ float gauss(float x, float s) {
   return exp(-0.5 * (x * x) / (s * s));
 }
 
-/* highlight roll-off: keeps hue while letting the core go white */
 vec3 clipHi(vec3 c) {
   return c / (1.0 + max(c - 1.0, vec3(0.0)) * 0.62);
 }
 
-const vec2  TRACK    = vec2(148.0, 60.0);
-const float TRACK_R  = 58.0;
-const float KNOB_H   = 40.0;
-const float KNOB_R   = 16.0;
-const float TRAVEL   = 100.0;
+const vec2  TRACK    = vec2(150.0, 42.0);
+const float TRACK_R  = 42.0;
+const float KNOB_H   = 50.0;
+const float KNOB_R   = 15.0;
+const float TRAVEL   = 96.0;
 `;
+
+  /* ---------------- pass A : the world ---------------- */
 
   const FRAG_WORLD = COMMON + `
 varying vec2 vUv;
@@ -96,129 +95,158 @@ uniform float uScale;
 uniform float uT;
 uniform float uTime;
 
-/* crescent moon */
+/* crescent, opening to the upper right */
 float moonField(vec2 q) {
-  float a = length(q - vec2(-2.5, 1.5)) - 20.0;
-  float b = length(q - vec2(8.5, -8.0)) - 18.5;
+  float a = length(q - vec2(-3.0, 1.5)) - 19.5;
+  float b = length(q - vec2(8.0, -7.0)) - 17.5;
   return max(a, -b);
 }
 
-/* sun: disc plus eight radiating spokes */
+/* sun: a disc plus eight spokes, by polar symmetry */
 float sunField(vec2 q) {
-  float d = length(q) - 14.5;
-  float rays = 1e9;
-  for (int i = 0; i < 8; i++) {
-    float a = float(i) * (PI * 0.25);
-    vec2 dir = vec2(cos(a), sin(a));
-    vec2 u = vec2(dot(q, dir), dot(q, vec2(-dir.y, dir.x)));
-    float dr = sdRoundBox(u - vec2(21.5, 0.0), vec2(1.4, 0.0), 2.6);
-    rays = min(rays, dr);
-  }
-  return min(d, rays);
+  float d = length(q) - 14.0;
+  float r = length(q);
+  float a = atan(q.y, q.x);
+  float seg = mod(a + 0.3926991, 0.7853982) - 0.3926991;
+  float ray = max(abs(seg) * r - 1.7, max(17.5 - r, r - 26.0));
+  return min(d, ray);
+}
+
+/* four point twinkle */
+float sparkleField(vec2 q, float r) {
+  float a = abs(q.x) * 5.5 + abs(q.y) - r;
+  float b = abs(q.y) * 5.5 + abs(q.x) - r;
+  return min(a, b);
 }
 
 void main() {
   float t  = clamp(uT, 0.0, 1.0);
+  float tp = smoothstep(0.04, 0.56, t);      /* glass / ink theme */
   float px = 1.0 / uScale;
   vec2  p  = (gl_FragCoord.xy - 0.5 * uRes) / uScale;
   float kx = mix(-TRAVEL, TRAVEL, t);
 
-  /* ---------- page ---------- */
-  vec3 bg = mix(vec3(0.043, 0.047, 0.058), vec3(0.906, 0.898, 0.874), t);
+  /* ---- page ---- */
+  vec3 bg = mix(vec3(0.038, 0.039, 0.044), vec3(0.928, 0.922, 0.908), tp);
   float vig = length(vUv - 0.5);
-  bg -= (0.030 + 0.030 * t) * vig * vig * 1.35;
+  bg -= (0.105 - 0.035 * tp) * vig * vig;
 
-  vec3  stripTint = mix(vec3(0.55, 0.74, 1.00), vec3(1.00, 0.79, 0.45), t);
-  float breathe   = 1.0 + 0.03 * sin(uTime * 0.9);
+  vec3  stripCol = mix(vec3(0.44, 0.60, 1.00), vec3(1.00, 0.60, 0.10), t);
+  float breathe  = 1.0 + 0.03 * sin(uTime * 0.9);
 
-  /* one glow model: cool at night, warm by day, same falloff */
+  /* the light spill from the strip, on the page itself */
   float rad = length(p - vec2(kx, 0.0));
-  bg += stripTint * (0.26 * gauss(rad, 160.0) + 0.09 * gauss(rad, 54.0)) * breathe;
+  bg += stripCol * (0.34 * gauss(rad, 118.0) + 0.20 * gauss(rad, 46.0)) * breathe;
 
-  /* ---------- track ---------- */
-  float dTr  = sdRoundBox(p, TRACK - TRACK_R, TRACK_R);
+  /* ---- track ---- */
+  float dTr = sdRoundBox(p, TRACK - TRACK_R, TRACK_R);
+
+  /* drop shadow of the whole track */
+  float shT = exp(-max(dTr, 0.0) / 26.0);
+  bg *= 1.0 - mix(0.58, 0.13, tp) * shT * (0.55 + 0.45 * gauss(p.y + 30.0, 60.0));
+
+  vec3 trk = bg + mix(0.052, 0.030, tp);
+  /* inner wall: dark at the bottom, lit at the top */
+  trk -= 0.060 * smoothstep(0.35, 1.0, clamp((p.y + TRACK.y) / (2.0 * TRACK.y), 0.0, 1.0));
+  trk += 0.030 * gauss(p.y + TRACK.y - 1.0, 4.0);
+  /* rim */
+  float rimT = exp(-abs(dTr + 0.6) / 1.3);
+  trk += rimT * mix(0.10, 0.30, tp);
+
+  /* wash that runs along the track with the knob */
+  vec2  sd  = vec2(cos(-PI * 0.5 + t * PI), sin(-PI * 0.5 + t * PI));
+  float wash = gauss(p.x - kx, 62.0) * gauss(p.y - sd.y * 40.0, 30.0);
+  trk += stripCol * wash * 0.30 * breathe;
+
   float trkA = 1.0 - smoothstep(-px * 1.8, px * 1.8, dTr);
-
-  vec3 trk = bg + mix(0.068, -0.070, t);
-  trk += mix(0.14, 0.09, t) * exp(-abs(dTr + 0.7) / 1.3);              /* hairline */
-  float zw = (dTr + 3.0) / 5.5;
-  trk -= 0.045 * exp(-zw * zw) * mix(1.0, 0.7, t);                     /* inner wall */
-
-  /* light washing along the track */
-  vec2  sdir = vec2(cos(-PI * 0.5 + t * PI), sin(-PI * 0.5 + t * PI));
-  float wash = gauss(p.x - kx, 58.0) * gauss(p.y - sdir.y * 46.0, 26.0);
-  trk += stripTint * wash * 0.52 * breathe;
-
   vec3 col = mix(bg, trk, trkA);
 
-  /* ---------- pixel icons behind the glass ---------- */
-  const float PITCH = 9.2;
-  const float CELL  = 4.0;
-  const float SPAN  = 32.2;
+  /* ---- dot matrix icons, behind the glass ---- */
+  const float PITCH = 5.6;
+  const float DOT   = 1.55;
+  const float REACH = 34.0;
 
   float sumA = 0.0;
   vec3  sumC = vec3(0.0);
   vec3  glowI = vec3(0.0);
 
+  vec3 inkN = vec3(0.85, 0.88, 0.95);
+  vec3 inkD = vec3(0.17, 0.17, 0.19);
+
   vec2 c0 = p - vec2(kx, 0.0);
-  if (max(abs(c0.x), abs(c0.y)) < 52.0) {
-    vec3 inkCool = vec3(0.60, 0.78, 1.00);
-    vec3 inkWarm = vec3(0.92, 0.66, 0.30);
+  if (max(abs(c0.x), abs(c0.y)) < REACH + 12.0) {
+    vec2 gi = floor(c0 / PITCH + 0.5);
 
-    for (int j = 0; j < 7; j++) {
-      for (int i = 0; i < 7; i++) {
-        vec2  ci = (vec2(float(i), float(j)) - 3.0) * PITCH;
-        float rr = length(ci) + 1e-4;
-        float aa = atan(ci.y, ci.x);
+    for (int dy = -1; dy <= 1; dy++) {
+      for (int dx = -1; dx <= 1; dx++) {
+        vec2 cell = gi + vec2(float(dx), float(dy));
+        if (max(abs(cell.x), abs(cell.y)) < 6.0) {
 
-        /* stagger: a wave that sweeps by angle, then by radius */
-        float w  = 0.60 * ((aa + PI) / (2.0 * PI)) + 0.40 * (rr / SPAN);
-        float kk = clamp((t * 1.55 - w * 0.55), 0.0, 1.0);
+          vec2  ci = cell * PITCH;
+          float rr = length(ci) + 1e-4;
+          float aa = atan(ci.y, ci.x);
 
-        /* per-pixel spring */
-        float sp = 1.0 - exp(-3.2 * kk) * cos(6.5 * kk);
-        float sk = clamp(sp, 0.0, 1.0);
+          /* staggered wave: angle first, then radius */
+          float w  = 0.55 * ((aa + PI) / (2.0 * PI)) + 0.45 * (rr / REACH);
+          float kk = clamp(t * 1.5 - w * 0.50, 0.0, 1.0);
 
-        /* swirl direction alternates per pixel, grows outward */
-        float sgn = (mod(float(i) + float(j), 2.0) < 0.5) ? -1.0 : 1.0;
-        float sw  = sgn * (0.30 + 0.78 * rr / SPAN) * sin(PI * sk);
+          /* per pixel spring */
+          float sp = 1.0 - exp(-3.4 * kk) * cos(6.8 * kk);
+          float sk = clamp(sp, 0.0, 1.0);
 
-        /* pairing by angle: the sun pixel at angle a+sw answers the moon pixel at a */
-        float mv = moonField(rot(ci, sw));
-        float sv = sunField(rot(ci, sw));
+          /* swirl: alternate direction per cell, grow outward */
+          float sgn = (mod(cell.x + cell.y, 2.0) < 0.5) ? -1.0 : 1.0;
+          float swA = sgn * (0.12 + 0.26 * rr / REACH) * sin(PI * sk);
 
-        float m = (1.0 - smoothstep(-2.5, 0.0, mv)) * (1.0 - smoothstep(0.60, 1.0, kk));
-        float s = (1.0 - smoothstep(-2.5, 0.0, sv)) * smoothstep(0.02, 0.44, kk);
-        float a = max(m, s);
+          /* moon pixel at angle a answers a sun pixel at a + swirl */
+          float mv = moonField(rot(ci, swA * 1.3));
+          float sv = sunField(rot(ci, swA * 1.3));
 
-        if (a > 0.012) {
-          vec2  pos = rot(ci, sw * 1.15);
-          float sc  = 1.0 - 0.52 * sin(PI * sk);
-          vec2  lp  = rot(p - vec2(kx, 0.0) - pos, -sw * 1.9);
-          float dPx = sdRoundBox(lp, vec2(CELL) * sc * 0.84, 1.7 * sc);
-          float cov = (1.0 - smoothstep(-px * 1.5, px * 1.5, dPx)) * a;
+          float m = (1.0 - smoothstep(-1.4, 0.0, mv)) * (1.0 - smoothstep(0.62, 0.99, kk));
+          float s = (1.0 - smoothstep(-1.4, 0.0, sv)) * smoothstep(0.03, 0.42, kk);
+          float a = max(m, s);
 
-          vec3 ink = mix(inkCool, inkWarm, smoothstep(0.0, 1.0, kk));
-          sumA += cov;
-          sumC += ink * cov;
-          glowI += ink * cov * 0.45 * sin(PI * sk);
+          if (a > 0.02) {
+            /* fly: tangential drift plus a breath outward */
+            vec2 tng = vec2(-ci.y, ci.x) / rr;
+            vec2 pos = ci + tng * min(rr * swA, 4.6) + (ci / rr) * (sin(PI * sk) * 2.2 * sgn);
+            float sc = 1.0 - 0.55 * sin(PI * sk);
+
+            float dpx = sdRoundBox(p - vec2(kx, 0.0) - pos, vec2(DOT * sc), 1.0 * sc);
+            float cov = (1.0 - smoothstep(-px * 1.3, px * 1.3, dpx)) * a;
+
+            float heat = hash21(cell + 7.0);
+            vec3  ink  = mix(inkN, inkD, tp) * (0.86 + 0.24 * heat);
+
+            sumA  += cov;
+            sumC  += ink * cov;
+            glowI += stripCol * cov * 0.30 * sin(PI * sk);
+          }
         }
       }
     }
   }
 
   if (sumA > 1e-4) {
-    col = mix(col, sumC / sumA, min(sumA, 1.0));
-    col += glowI;
+    col = mix(col, sumC / sumA, min(sumA, 1.0) * 0.94);
   }
 
-  /* ---------- grain ---------- */
-  col += (hash21(gl_FragCoord.xy) - 0.5) * 0.02;
+  /* ---- twinkles ---- */
+  float sp1 = 1.0 - smoothstep(-0.6, 2.2, sparkleField(c0 - vec2(30.0, 17.0), 7.0));
+  float sp2 = 1.0 - smoothstep(-0.6, 1.8, sparkleField(c0 - vec2(37.0, 27.0), 4.4));
+  float tw  = 0.55 + 0.45 * sin(uTime * 2.1 + 1.7);
+  col += (sp1 + sp2 * 0.7) * 0.45 * vec3(1.0, 0.98, 0.92) * tw * mix(1.0, 0.5, tp);
+  col += glowI;
+
+  /* ---- grain ---- */
+  col += (hash21(gl_FragCoord.xy) - 0.5) * 0.022;
 
   col = clipHi(max(col, vec3(0.0)));
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 `;
+
+  /* ---------------- pass B : the glass ---------------- */
 
   const FRAG_GLASS = COMMON + `
 varying vec2 vUv;
@@ -230,6 +258,7 @@ uniform float uTime;
 
 void main() {
   float t  = clamp(uT, 0.0, 1.0);
+  float tp = smoothstep(0.04, 0.56, t);
   float px = 1.0 / uScale;
 
   vec2 res = uRes;
@@ -239,33 +268,31 @@ void main() {
   float kx = mix(-TRAVEL, TRAVEL, t);
   vec2  q  = p - vec2(kx, 0.0);
 
-  /* knob silhouette */
-  float d = sdRoundBox(q, vec2(KNOB_H - KNOB_R), KNOB_R);
+  /* ---- silhouette + outward normal ---- */
   vec2  hs = vec2(KNOB_H - KNOB_R);
-  float e  = 1.0;
-  vec2 g = vec2(
+  float d  = sdRoundBox(q, hs, KNOB_R);
+  float e  = 1.2;
+  vec2  g  = vec2(
     sdRoundBox(q + vec2(e, 0.0), hs, KNOB_R) - sdRoundBox(q - vec2(e, 0.0), hs, KNOB_R),
     sdRoundBox(q + vec2(0.0, e), hs, KNOB_R) - sdRoundBox(q - vec2(0.0, e), hs, KNOB_R)
   );
   vec2 nrm = g / (length(g) + 1e-6);
 
-  /* bevel depth */
-  float uu   = clamp(-d / (KNOB_R * 0.74), 0.0, 1.0);
-  float lift = pow(1.0 - uu, 1.9);
+  /* bevel profile: 0 at the rim, 1 deep inside */
+  float uu   = clamp(-d / 16.0, 0.0, 1.0);
+  float lift = pow(1.0 - uu, 2.2);
 
-  /* ---------- refracted, frosted view of the world ---------- */
-  vec2 cUv   = (0.5 * res + vec2(kx, 0.0) * uScale) / res;
-  vec2 rel   = uv - cUv;
-  vec2 bUv   = cUv + rel * (1.0 - 0.12 * lift);
-  vec2 disp  = nrm * (lift * 12.0 * uScale) / res;
+  /* ---- refracted + frosted view of the world ---- */
+  vec2 cUv = (0.5 * res + vec2(kx, 0.0) * uScale) / res;
+  vec2 rel = uv - cUv;
+  vec2 bUv = cUv + rel * (1.0 - 0.11 * lift);
+  vec2 disp = nrm * (lift * 13.0 * uScale) / res;
 
-  /* chromatic aberration: each channel bends a little differently */
-  float cr = texture2D(uWorld, bUv + disp * 1.09).r;
+  float cr = texture2D(uWorld, bUv + disp * 1.12).r;
   float cg = texture2D(uWorld, bUv + disp * 1.00).g;
-  float cb = texture2D(uWorld, bUv + disp * 0.90).b;
+  float cb = texture2D(uWorld, bUv + disp * 0.88).b;
 
-  /* frost: a widening cross blur */
-  vec2 fr = vec2((2.2 + 4.6 * lift) * uScale) / res;
+  vec2 fr = vec2((1.4 + 3.0 * lift) * uScale) / res;
   vec3 frostCol = (
     texture2D(uWorld, bUv + disp + vec2(fr.x, 0.0)).rgb +
     texture2D(uWorld, bUv + disp - vec2(fr.x, 0.0)).rgb +
@@ -273,55 +300,73 @@ void main() {
     texture2D(uWorld, bUv + disp - vec2(0.0, fr.y)).rgb
   ) * 0.25;
 
-  float frost = mix(0.10, 0.88, pow(1.0 - uu, 1.1));
+  float frost = mix(0.06, 0.55, pow(1.0 - uu, 1.4));
   vec3  glass = mix(vec3(cr, cg, cb), frostCol, frost);
 
-  /* glass body */
-  vec3 tint = mix(vec3(0.40, 0.50, 0.72), vec3(0.94, 0.88, 0.76), t);
-  glass = glass * 0.93 + tint * (0.05 + 0.06 * frost);
-  float zd = (d + 2.2) / 3.2;
-  glass -= 0.30 * exp(-zd * zd);
-  glass += exp(-abs(d + 0.7) / 1.2) * (0.26 + 0.14 * lift) * vec3(1.0, 0.99, 0.96);
+  /* ---- glass body ---- */
+  vec3 tintD = vec3(0.075, 0.080, 0.095);
+  vec3 tintL = vec3(0.985, 0.982, 0.975);
+  vec3 tint  = mix(tintD, tintL, tp);
+  glass = glass * 0.90 + tint * 0.16;
 
-  /* a faint diagonal highlight across the bevel */
-  glass += gauss(q.x + q.y * 1.25 - 24.0, 10.0) * smoothstep(-3.0, 4.0, -d) * 0.10;
+  /* top bevel catch-light, bottom inner shadow */
+  float gy = clamp((q.y + KNOB_H) / (2.0 * KNOB_H), 0.0, 1.0);
+  glass += 0.16 * pow(gy, 3.0) * smoothstep(-3.0, 3.0, -d);
+  glass -= 0.20 * pow(1.0 - gy, 2.5) * smoothstep(-4.0, 2.0, -d);
+  float zc = (d + 2.0) / 3.0;
+  glass -= 0.22 * exp(-zc * zc);
 
-  /* ---------- the light strip ---------- */
-  float ang  = -PI * 0.5 + t * PI;     /* bottom at night, top by day */
+  /* ---- the light ---- */
+  float ang  = -PI * 0.5 + t * PI;      /* bottom at night, top by day */
   vec2  sdir = vec2(cos(ang), sin(ang));
 
-  float aa   = atan(q.y, q.x);
-  float adiff = abs(mod(aa - ang + PI, 2.0 * PI) - PI);
-  float an = adiff / 0.60;
+  /* how much this edge point faces the strip */
+  float face = clamp(dot(nrm, sdir), 0.0, 1.0);
+  float wEdge = 0.26 + 0.74 * pow(face, 1.6);
+
+  vec3 stripCol = mix(vec3(0.42, 0.58, 1.00), vec3(1.00, 0.58, 0.06), t);
+  float shim = 1.0 + 0.05 * sin(uTime * 1.6);
+
+  /* edge-lit line, hugging the glass */
+  float rimLine = exp(-abs(d - 0.1) / 1.5);
+  vec3  rimEmis = (vec3(1.0, 0.985, 0.95) * 1.5 + stripCol * 1.9) * rimLine * wEdge * shim;
+
+  /* the strip itself: a hot arc on the glass edge */
+  float aa     = atan(q.y, q.x);
+  float ad     = abs(mod(aa - ang + PI, 2.0 * PI) - PI);
+  float an     = ad / 0.55;
   float angMask = exp(-an * an * an * an);
+  float zb     = (d - 1.0) / 2.6;
+  float band   = exp(-zb * zb);
+  vec3  stripEmis = (vec3(1.0, 0.99, 0.96) * 2.4 + stripCol * 1.6) * band * angMask * shim;
 
-  float zb = (d - 1.5) / 2.4;
-  float band  = exp(-zb * zb);
-  float shim  = 1.0 + 0.07 * sin(uTime * 1.6);
-  float core  = band * angMask * shim;
-
-  vec3 stripCol = mix(vec3(0.58, 0.78, 1.00), vec3(1.00, 0.80, 0.45), t);
-  vec3 emitS = (vec3(1.0, 0.985, 0.94) * 2.5 + stripCol * 1.2) * core;
-
-  /* spill onto the page: same glow model, wide falloff */
+  /* bloom, same falloff on both backgrounds */
   float outD = max(d, 0.0);
-  vec3  halo = stripCol * angMask *
-               (0.42 * exp(-outD / 10.0) + 0.15 * exp(-outD / 36.0));
+  float wBloom = 0.20 + 0.80 * pow(face, 1.4);
+  vec3  bloom = stripCol * wBloom *
+                (0.62 * exp(-outD / 5.5) + 0.34 * exp(-outD / 20.0) + 0.13 * exp(-outD / 78.0));
 
   /* scatter inside the glass */
-  float dS = length(q - sdir * 34.0);
+  float dS = length(q - sdir * 42.0);
   float insideF = 1.0 - smoothstep(-px * 2.0, px * 2.0, d);
+  float warm = smoothstep(6.0, 44.0, q.y);
   vec3  scat = stripCol * insideF *
-               (0.50 * gauss(dS, 30.0) + 0.65 * gauss(dS, 10.0));
+               (0.30 * gauss(dS, 34.0) + 0.45 * gauss(dS, 12.0) + 0.16 * warm * tp);
 
-  /* ---------- compose ---------- */
+  /* ---- compose ---- */
   vec3 world = texture2D(uWorld, uv).rgb;
   float inside = 1.0 - smoothstep(-px * 2.0, px * 2.0, d);
 
+  /* the knob's own shadow, cast down-right onto track and page */
+  vec2  qs = q - vec2(3.0, 7.0);
+  float ds = sdRoundBox(qs, hs, KNOB_R);
+  float sh = exp(-max(ds, 0.0) / 16.0);
+
   vec3 col = world;
-  col -= mix(0.26, 0.08, t) * exp(-outD / 9.0) * (1.0 - inside);   /* contact shade */
+  col -= mix(0.60, 0.16, tp) * sh * (1.0 - inside);
+
   col = mix(col, glass, inside);
-  col += scat + emitS + halo;
+  col += scat + rimEmis + stripEmis + bloom;
 
   col = clipHi(max(col, vec3(0.0)));
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
@@ -374,6 +419,7 @@ void main() {
   }
 
   const uA = uniforms(progA, ['uRes', 'uScale', 'uT', 'uTime']);
+  const uB = uniforms(progB, ['uRes', 'uScale', 'uT', 'uTime', 'uWorld']);
 
   const quad = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -385,7 +431,6 @@ void main() {
   const aPosA = gl.getAttribLocation(progA, 'aPos');
   const aPosB = gl.getAttribLocation(progB, 'aPos');
 
-  /* off-screen target for the world pass */
   let fbo = null;
   let fboTex = null;
 
@@ -419,7 +464,7 @@ void main() {
      sizing
      ============================================================ */
 
-  let scale = 1;       // CSS px per layout unit
+  let scale = 1;
   let dpr = 1;
 
   function resize() {
@@ -427,7 +472,7 @@ void main() {
     const vh = window.innerHeight;
     dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-    scale = Math.min(vw / 380, vh / 250, 2.6);
+    scale = Math.min(vw / 390, vh / 250, 2.6);
 
     const w = Math.max(1, Math.round(vw * dpr));
     const h = Math.max(1, Math.round(vh * dpr));
@@ -441,8 +486,8 @@ void main() {
     canvas.style.height = vh + 'px';
 
     surface.style.width = (TRACK_W * scale) + 'px';
-    surface.style.height = (TRACK_H * scale) + 'px';
-    surface.style.borderRadius = (TRACK_H * 0.5 * scale) + 'px';
+    surface.style.height = (KNOB * scale + 6) + 'px';
+    surface.style.borderRadius = (KNOB * 0.2 * scale) + 'px';
   }
 
   window.addEventListener('resize', resize);
@@ -451,8 +496,8 @@ void main() {
      state
      ============================================================ */
 
-  let t = 0;                 // current scrub position, 0 night – 1 day
-  let tween = null;          // { from, to, start, dur }
+  let t = 0;
+  let tween = null;
   let dragging = false;
   let moved = false;
   let suppressClick = false;
@@ -472,6 +517,7 @@ void main() {
     if (dur === 0) {
       t = target;
       tween = null;
+      setChecked();
       return;
     }
     tween = { from: t, to: target, start: performance.now(), dur: dur };
@@ -488,7 +534,7 @@ void main() {
   function scrubFrom(clientX) {
     const r = surface.getBoundingClientRect();
     const cx = r.left + r.width * 0.5;
-    const half = TRAVEL * 2 * scale * 0.5;     // half of the travel in px
+    const half = TRAVEL * scale;
     const v = 0.5 + (clientX - cx) / (half * 2);
     t = Math.max(0, Math.min(1, v));
     tween = null;
@@ -530,7 +576,7 @@ void main() {
       suppressClick = false;
       return;
     }
-    if (!dragging) toggle();
+    toggle();
   });
 
   surface.addEventListener('keydown', (ev) => {
@@ -566,7 +612,7 @@ void main() {
      ============================================================ */
 
   let raf = 0;
-  let running = true;
+  let running = false;
 
   function frame(now) {
     if (tween) {
@@ -615,8 +661,6 @@ void main() {
     drawQuad(progB, aPosB);
   }
 
-  const uB = uniforms(progB, ['uRes', 'uScale', 'uT', 'uTime', 'uWorld']);
-
   function start() {
     if (running) return;
     running = true;
@@ -642,5 +686,5 @@ void main() {
   resize();
   setChecked();
   updateReadout();
-  raf = requestAnimationFrame(frame);
+  start();
 })();
